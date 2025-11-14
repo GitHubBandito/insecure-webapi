@@ -5,14 +5,17 @@ import bcrypt
 import mysql.connector
 import base64
 import shutil
+import magic # ### NUEVO (A08) ###
 from datetime import datetime
 from pathlib import Path
 from bottle import route, run, template, post, request, static_file
-# (random ya no se usa)
 
+# ### NUEVO (A08) ###
+# Lista blanca de extensiones permitidas
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
 
 def loadDatabaseSettings(pathjs):
-# ... (código original) ...
+# ... (código anterior) ...
 	pathjs = Path(pathjs)
 	sjson = False
 	if pathjs.exists():
@@ -21,12 +24,12 @@ def loadDatabaseSettings(pathjs):
 	return sjson
 
 def getToken():
-# ... (código corregido en A02) ...
+# ... (código anterior) ...
 	return secrets.token_hex(32)
 
 @post('/Registro')
 def Registro():
-# ... (conexión DB) ...
+# ... (código corregido A02, A03) ...
 	dbcnf = loadDatabaseSettings('db.json');
 	db = mysql.connector.connect(
 		host='localhost', port = dbcnf['port'],
@@ -63,10 +66,9 @@ def Registro():
 		return {"R":-2}
 	return {"R":0,"D":R}
 
-
 @post('/Login')
 def Login():
-# ... (conexión DB) ...
+# ... (código corregido A02, A03) ...
 	dbcnf = loadDatabaseSettings('db.json');
 	db = mysql.connector.connect(
 		host='localhost', port = dbcnf['port'],
@@ -142,9 +144,9 @@ def Login():
 		db.close()
 		return {"R":-4}
 
+
 @post('/Imagen')
 def Imagen():
-# ... (crear directorios) ...
 	#Directorio
 	tmp = Path('tmp')
 	if not tmp.exists():
@@ -153,15 +155,18 @@ def Imagen():
 	if not img.exists():
 		img.mkdir()
 	
-	###/ obtener el cuerpo de la peticion
 	if not request.json:
 		return {"R":-1}
-	######/
 	R = 'name' in request.json  and 'data' in request.json and 'ext' in request.json  and 'token' in request.json
-	# TODO checar si estan vacio los elementos del json
 	if not R:
 		return {"R":-1}
 	
+	# ### NUEVO (A08): Validar extensión ---
+	user_ext = request.json['ext'].lower()
+	if user_ext not in ALLOWED_EXTENSIONS:
+		return {"R": -5, "M": "Extensión de archivo no permitida"}
+	# ------------------------------------
+
 	dbcnf = loadDatabaseSettings('db.json');
 	db = mysql.connector.connect(
 		host='localhost', port = dbcnf['port'],
@@ -172,15 +177,14 @@ def Imagen():
 
 	TKN = request.json['token'];
 	
-	R = False
 	id_Usuario = None
 	try:
 		with db.cursor() as cursor:
-			# ### MODIFICADO (A03) ###
+			# (Corregido A03)
 			query = "SELECT id_Usuario FROM AccesoToken WHERE token = %s"
 			cursor.execute(query, (TKN,));
 			R = cursor.fetchall()
-			if not R: # Añadimos validación
+			if not R:
 				db.close()
 				return {"R":-5, "M":"Token inválido"}
 			id_Usuario = R[0][0]
@@ -190,27 +194,44 @@ def Imagen():
 		return {"R":-2}
 	
 	
+	# ### NUEVO (A08): Validar contenido ---
+	try:
+		file_data = base64.b64decode(request.json['data'].encode())
+	except Exception:
+		db.close()
+		return {"R": -6, "M": "Base64 inválido"}
+
+	# Validar el tipo de archivo real (MIME type)
+	mime_type = magic.from_buffer(file_data, mime=True)
+	if not mime_type.startswith('image/'):
+		db.close()
+		return {"R": -7, "M": "El contenido no es una imagen válida"}
+	# ------------------------------------
+
+	# Escribir el archivo validado
 	with open(f'tmp/{id_Usuario}',"wb") as imagen:
-		imagen.write(base64.b64decode(request.json['data'].encode()))
+		imagen.write(file_data) # Escribimos los datos ya decodificados
 	
 	try:
 		with db.cursor() as cursor:
-			# ### MODIFICADO (A03) ###
+			# (Corregido A03)
 			query_ins = "INSERT INTO Imagen (name, ruta, id_Usuario) VALUES (%s, %s, %s)"
 			cursor.execute(query_ins, (request.json["name"], "img/", id_Usuario));
 			
-			# Obtenemos el ID de forma segura
 			idImagen = cursor.lastrowid
 			
-			# (Nota: La extensión sigue siendo vulnerable, se corrige en A08)
-			ruta_final = f"img/{idImagen}.{request.json['ext']}"
+			# ### MODIFICADO (A08) ###
+			# Usamos la 'user_ext' validada, no la del JSON
+			ruta_final = f"img/{idImagen}.{user_ext}"
 			
+			# (Corregido A03)
 			query_upd = "UPDATE Imagen SET ruta = %s WHERE id = %s"
 			cursor.execute(query_upd, (ruta_final, idImagen));
 			
 			db.commit()
 			
-			# (Nota: La extensión sigue siendo vulnerable, se corrige en A08)
+			# ### MODIFICADO (A08) ###
+			# Mover el archivo usando la ruta final segura
 			shutil.move(f'tmp/{id_Usuario}', ruta_final)
 			return {"R":0,"D":idImagen}
 	except Exception as e: 
@@ -218,10 +239,9 @@ def Imagen():
 		db.close()
 		return {"R":-3}
 	
-
 @post('/Descargar')
 def Descargar():
-# ... (conexión DB) ...
+# ... (código corregido A01, A03) ...
 	dbcnf = loadDatabaseSettings('db.json');
 	db = mysql.connector.connect(
 		host='localhost', port = dbcnf['port'],
