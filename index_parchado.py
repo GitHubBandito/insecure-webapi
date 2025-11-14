@@ -1,21 +1,33 @@
 import json
-import random
+import secrets # ### NUEVO ###
 import hashlib
+import bcrypt # ### NUEVO ###
 import mysql.connector
 import base64
 import shutil
 from datetime import datetime
 from pathlib import Path
 from bottle import route, run, template, post, request, static_file
+# Se eliminó 'import random'
 
-# ... (Todo el código de /Registro y /Login sigue igual) ...
-# ... (Todo el código de /Imagen sigue igual) ...
-# ... (loadDatabaseSettings y getToken siguen igual) ...
-# ... (Omitido por brevedad) ...
+
+def loadDatabaseSettings(pathjs):
+# ... (código original) ...
+	pathjs = Path(pathjs)
+	sjson = False
+	if pathjs.exists():
+		with pathjs.open() as data:
+			sjson = json.load(data)
+	return sjson
+
+# ### MODIFICADO ###
+def getToken():
+	# Genera un token aleatorio seguro de 32 bytes (64 caracteres)
+	return secrets.token_hex(32)
 
 @post('/Registro')
 def Registro():
-# ... (código original) ...
+# ... (conexión DB) ...
 	dbcnf = loadDatabaseSettings('db.json');
 	db = mysql.connector.connect(
 		host='localhost', port = dbcnf['port'],
@@ -30,12 +42,18 @@ def Registro():
 	# TODO checar si estan vacio los elementos del json
 	if not R:
 		return {"R":-1}
-	# TODO validar correo en json
-	# TODO Control de error de la DB
+	
 	R = False
 	try:
 		with db.cursor() as cursor:
-			cursor.execute(f'insert into Usuario values(null,"{request.json["uname"]}","{request.json["email"]}",md5("{request.json["password"]}"))');
+			# ### MODIFICADO ###
+			# Se usa Bcrypt para hashear la contraseña
+			password_bytes = request.json["password"].encode('utf-8')
+			salt = bcrypt.gensalt()
+			hashed_password = bcrypt.hashpw(password_bytes, salt).decode('utf-8')
+			
+			# (Nota: Esto SIGUE siendo vulnerable a SQLi, se corrige en A03)
+			cursor.execute(f'insert into Usuario values(null,"{request.json["uname"]}","{request.json["email"]}", "{hashed_password}")');
 			R = cursor.lastrowid
 			db.commit()
 		db.close()
@@ -44,9 +62,10 @@ def Registro():
 		return {"R":-2}
 	return {"R":0,"D":R}
 
+
 @post('/Login')
 def Login():
-# ... (código original) ...
+# ... (conexión DB) ...
 	dbcnf = loadDatabaseSettings('db.json');
 	db = mysql.connector.connect(
 		host='localhost', port = dbcnf['port'],
@@ -63,14 +82,31 @@ def Login():
 	if not R:
 		return {"R":-1}
 	
-	# TODO validar correo en json
-	# TODO Control de error de la DB
-	R = False
+	user_id = None
 	try:
 		with db.cursor() as cursor:
-			print(f'Select id from  Usuario where uname ="{request.json["uname"]}" and password = md5("{request.json["password"]}")')
-			cursor.execute(f'Select id from  Usuario where uname ="{request.json["uname"]}" and password = md5("{request.json["password"]}")');
-			R = cursor.fetchall()
+			# ### MODIFICADO ###
+			# 1. Obtener el id y el hash guardado
+			# (Nota: Esto SIGUE siendo vulnerable a SQLi, se corrige en A03)
+			cursor.execute(f'Select id, password from Usuario where uname ="{request.json["uname"]}"');
+			user_data = cursor.fetchone()
+
+			if not user_data:
+				db.close()
+				return {"R":-3} # Usuario no existe
+			
+			user_id, stored_hash = user_data
+			password_bytes = request.json["password"].encode('utf-8')
+			stored_hash_bytes = stored_hash.encode('utf-8')
+
+			# 2. Comparar la contraseña con el hash usando Bcrypt
+			if not bcrypt.checkpw(password_bytes, stored_hash_bytes):
+				db.close()
+				return {"R":-3} # Contraseña incorrecta
+			
+			# Si la contraseña es correcta, preparamos R para la lógica de token
+			R = [(user_id,)] 
+
 	except Exception as e: 
 		print(e)
 		db.close()
@@ -81,7 +117,9 @@ def Login():
 		db.close()
 		return {"R":-3}
 	
-	T = getToken();
+	T = getToken(); # Usa la nueva función segura
+	
+	# ... (El resto de la lógica de token sigue igual) ...
 	#file_put_contents('/tmp/log','insert into AccesoToken values('.R[0].',"'.T.'",now())');
 	with open("/tmp/log","a") as log:
 		log.write(f'Delete from AccesoToken where id_Usuario = "{R[0][0]}"\n')
@@ -90,6 +128,7 @@ def Login():
 	
 	try:
 		with db.cursor() as cursor:
+			# (Nota: Esto SIGUE siendo vulnerable a SQLi, se corrige en A03)
 			cursor.execute(f'Delete from AccesoToken where id_Usuario = "{R[0][0]}"');
 			cursor.execute(f'insert into AccesoToken values({R[0][0]},"{T}",now())');
 			db.commit()
@@ -100,6 +139,7 @@ def Login():
 		db.close()
 		return {"R":-4}
 
+# ... (El código de /Imagen sigue igual) ...
 @post('/Imagen')
 def Imagen():
 # ... (código original) ...
@@ -165,9 +205,10 @@ def Imagen():
 		db.close()
 		return {"R":-3}
 
-
+# ... (El código de /Descargar (con fix A01) sigue igual) ...
 @post('/Descargar')
 def Descargar():
+# ... (código con fix A01) ...
 	dbcnf = loadDatabaseSettings('db.json');
 	db = mysql.connector.connect(
 		host='localhost', port = dbcnf['port'],
