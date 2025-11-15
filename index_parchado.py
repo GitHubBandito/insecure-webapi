@@ -309,5 +309,17 @@ def Descargar():
 	return static_file(R[0][1],Path(".").resolve())
 
 if __name__ == '__main__':
-	# ### MODIFICADO (A05) ###
-    run(host='localhost', port=8080, debug=False)
+    # ### MODIFICADO (A05) Y COMPLEMENTADO PARA PRODUCCIÓN ###
+    #
+    # Se utiliza una configuración de servidor de producción (gunicorn)
+    # con certificados SSL (HTTPS), pero MANTENIENDO debug=False
+    # para evitar la vulnerabilidad de Configuración Incorrecta.
+    #
+    run(
+        host='0.0.0.0',     # Escucha en todas las interfaces, no solo localhost
+        port=8443,          # Puerto estándar para HTTPS
+        debug=False,        # <-- ESTA ES LA CORRECCIÓN A05
+        server='gunicorn',  # Servidor WSGI de producción
+        keyfile='/home/amarillo/certs/amarillo.local-key.pem', # Clave privada SSL
+        certfile='/home/amarillo/certs/amarillo.local.pem'  # Certificado SSL
+    )
